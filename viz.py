@@ -7,7 +7,7 @@ def contingency_matrix(X, y, y_pred, df=pd.DataFrame(),
                        y_labels=None, y_pred_labels=None,
                        tooltip_cols=None, width=600, height=600,
                        cmap='tableau20', filename='cm.html',
-                       sort=True):
+                       sort=True, sort_type='rc'):
     tooltip_cols = [] if tooltip_cols is None else tooltip_cols
     tooltip_cols.extend(['label_id', 'label_id_pred'])
     df['x'], df['y'] = X[:, 0], X[:, 1]
@@ -37,8 +37,28 @@ def contingency_matrix(X, y, y_pred, df=pd.DataFrame(),
         for label_id, label_id_pred in zip(y, y_pred):
             cm[l2i[label_id], lp2i[label_id_pred]] += 1
         print(cm)
-        y_order = np.argsort(-np.amax(cm, axis=1))
-        y_pred_order = np.argsort(-np.amax(cm, axis=0))
+        # y_order = np.argsort(-np.amax(cm, axis=1))
+        # y_pred_order = np.argsort(-np.amax(cm, axis=0))
+        if sort_type == 'rc':
+            new_rows = np.lexsort((np.argmax(cm, axis=1),
+                                   -np.amax(cm, axis=1)))
+            new_cm_rc = cm[new_rows, :]
+            new_cols = np.lexsort((np.argmax(new_cm_rc, axis=0),
+                                   -np.amax(new_cm_rc, axis=0)))
+            new_cm_rc = new_cm_rc[:, new_cols]
+            print(new_cm_rc)
+        elif sort_type == 'cr':
+            new_cols = np.lexsort((np.argmax(cm, axis=0),
+                                   -np.amax(cm, axis=0)))
+            new_cm_cr = cm[:, new_cols]
+            new_rows = np.lexsort((np.argmax(new_cm_cr, axis=1),
+                                   -np.amax(new_cm_cr, axis=1)))
+            new_cm_cr = new_cm_cr[new_rows, :]
+            print(new_cm_cr)
+        else:
+            raise ValueError(sort_type)
+        y_order = new_rows
+        y_pred_order = new_cols
         y_order = [labels_ids[i] for i in y_order]
         y_pred_order = [labels_pred_ids[i] for i in y_pred_order]
         if y_labels is not None:
@@ -107,10 +127,10 @@ def contingency_matrix(X, y, y_pred, df=pd.DataFrame(),
     ).add_selection(
         selection
     ).interactive()
-    p = legend + text | (points & points_pred).resolve_scale(
+    cmat = legend + text | (points & points_pred).resolve_scale(
         color='independent')
-    p.save(filename)
-    return p
+    cmat.save(filename)
+    return cmat
 
 
 if __name__ == '__main__':
@@ -158,4 +178,5 @@ if __name__ == '__main__':
                        y_pred_labels=y_pred_labels,
                        cmap='tableau20',  # https://vega.github.io/vega/docs/schemes/
                        filename='cm_test.html',
-                       sort=True)
+                       sort=True,
+                       sort_type='rc')
