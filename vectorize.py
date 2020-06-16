@@ -16,6 +16,8 @@ import os
 import argparse
 from sklearn.decomposition import PCA
 
+from viz import contingency_matrix as cmat
+
 
 def w2v(data, model_path='data/word2vec_sg0'):
     if os.path.isfile(model_path):
@@ -145,8 +147,6 @@ if __name__ == '__main__':
     plt.show()
 
     if args.cmat:
-        from viz import contingency_matrix as cmat
-
         db_labels = pd.read_sql("SELECT * FROM Labels", conn)
         i2l = dict(zip(db_labels['label_id'], db_labels['label_desc']))
         df = files
