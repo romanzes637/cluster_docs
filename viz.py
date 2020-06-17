@@ -72,12 +72,17 @@ def contingency_matrix(X, y, y_pred, df=pd.DataFrame(),
     else:
         y_order = 'ascending'
         y_pred_order = 'ascending'
+    # print(df[label_col])
     if inter_type == 'mat_leg':
-        selection = alt.selection_multi(fields=[label_col, label_pred_col],
-                                        empty='all',
-                                        # toggle='event.altKey'
-                                        # toggle='event.altKey && event.shiftKey'
-                                        )
+        selection = alt.selection_multi(
+            fields=[label_col, label_pred_col],
+            empty='none',
+            init=[{label_col: v, label_pred_col: v2}
+                  for v, v2 in zip(list(df[label_col]),
+                                   list(df[label_pred_col]))]
+            # toggle='event.altKey'
+            # toggle='event.altKey && event.shiftKey'
+            )
         sel_y = alt.selection_multi(fields=[label_col],
                                     bind='legend',
                                     empty='none',
