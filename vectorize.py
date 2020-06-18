@@ -124,6 +124,25 @@ def rdf(corpus):
     return vectors
 
 
+def topic_net(files, *args, **kwargs):
+    data_path = 'data/topic_net.csv'
+    df = pd.read_csv(data_path, usecols=['file_paths', 'vec'],
+                     converters={'vec': lambda x: json.loads(x)})
+    dim = len(df['vec'][0])
+    fp2i = {x: i for i, x in enumerate(df['file_paths'])}
+    vectors = []
+    for i, row in files.iterrows():
+        fp = row['file_path']
+        i2 = fp2i.get(fp, None)
+        if i2 is not None:
+            vectors.append(df['vec'][i2])
+        else:
+            print(fp)
+            vectors.append([0 for _ in range(dim)])
+    vectors = np.array(vectors)
+    return vectors
+
+
 def cluster(vec, n_clusters):
     return KMeans(n_clusters, random_state=42).fit(vec).labels_
 
@@ -141,9 +160,9 @@ def lbl2color(l):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--type', choices=['word2vec', 'doc2vec', 'lsa', 'lda',
-                                           'rdf', 'test'])
+                                           'rdf', 'test', 'topic_net'])
     parser.add_argument('--type2', choices=['word2vec', 'doc2vec', 'lsa', 'lda',
-                                            'rdf', 'test'],
+                                            'rdf', 'test', 'topic_net'],
                         default=None)
     parser.add_argument('--labels', choices=['db', 'cluster'])
     parser.add_argument('--save', type=str, default=None)
@@ -170,6 +189,8 @@ if __name__ == '__main__':
         vectors = test(files['text'])
     elif args.type == 'rdf':
         vectors = rdf(files['text'])
+    elif args.type == 'topic_net':
+        vectors = topic_net(files)
     else:
         assert False, '{} is not implemented'.format(args.type)
 
@@ -260,6 +281,8 @@ if __name__ == '__main__':
                 vectors2 = test(files['text'])
             elif args.type2 == 'rdf':
                 vectors2 = rdf(files['text'])
+            elif args.type2 == 'topic_net':
+                vectors2 = topic_net(files)
             else:
                 assert False, '{} is not implemented'.format(args.type)
             labels2 = cluster(vectors2, n_clusters=20)
