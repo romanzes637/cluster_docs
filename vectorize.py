@@ -10,11 +10,13 @@ from sklearn.cluster import KMeans
 from nltk.corpus import stopwords
 import pandas as pd
 from sklearn.manifold import TSNE
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
 import numpy as np
 import os
 import argparse
 from sklearn.decomposition import PCA
+import json
+from pprint import pprint
 
 from viz import contingency_matrix as cmat
 
@@ -66,13 +68,60 @@ def lsa(corpus):
 
 
 def lda(corpus):
-    tf = CountVectorizer().fit_transform(corpus).toarray()
-    return LatentDirichletAllocation(
-        n_components=100,
-        random_state=42,
-        n_jobs=-1,
-        verbose=1
-    ).fit_transform(tf)
+    lda_path = 'data/lda_vecs.npy'
+    if not os.path.exists(lda_path):
+        tf = CountVectorizer().fit_transform(corpus).toarray()
+        vectors = LatentDirichletAllocation(
+            n_components=100,
+            random_state=42,
+            n_jobs=-1,
+            verbose=1
+        ).fit_transform(tf)
+        np.save(lda_path, vectors)
+    else:
+        vectors = np.load(lda_path)
+    return vectors
+
+
+def test(corpus):
+    np.random.seed(42)
+    return np.random.rand(len(corpus), 2)
+
+
+def rdf(corpus):
+    with open('data/dict.jsonld', encoding="utf8") as f:
+        data = json.load(f)
+    pprint(data)
+    w2i, i2w, ids = {}, {}, []
+    for d in data['@graph']:
+        if d['@type'] != 'skos:Concept':
+            continue
+        i = d['@id']
+        ids.append(i)
+        words = []
+        for key in ['skos:prefLabel', 'skos:altLabel', 'skos:hiddenLabel']:
+            pairs = d.get(key, {}).items()
+            for lang, labels in pairs:
+                if isinstance(labels, list):
+                    words.extend(labels)
+                else:
+                    words.append(labels)
+        # print(words)
+        for w in words:
+            w2i.setdefault(w, []).append(len(ids) - 1)
+            i2w.setdefault(len(ids) - 1, []).append(w)
+    vectors = np.zeros((len(corpus), len(ids)))
+    for index, row in enumerate(corpus):
+        tokens = row.split()
+        for k in range(1, 3):
+            for j in range(0, len(tokens), k):
+                t = ' '.join(tokens[j:j + k])
+                i = w2i.get(t, None)
+                if i is not None:
+                    vectors[index, i] += 1
+    vectors /= vectors.sum(axis=1, keepdims=True)
+    vectors = np.nan_to_num(vectors, nan=0)
+    return vectors
 
 
 def cluster(vec, n_clusters):
@@ -91,7 +140,11 @@ def lbl2color(l):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--type', choices=['word2vec', 'doc2vec', 'lsa', 'lda'])
+    parser.add_argument('--type', choices=['word2vec', 'doc2vec', 'lsa', 'lda',
+                                           'rdf', 'test'])
+    parser.add_argument('--type2', choices=['word2vec', 'doc2vec', 'lsa', 'lda',
+                                            'rdf', 'test'],
+                        default=None)
     parser.add_argument('--labels', choices=['db', 'cluster'])
     parser.add_argument('--save', type=str, default=None)
     parser.add_argument('--cmat', action='store_true')
@@ -113,13 +166,17 @@ if __name__ == '__main__':
         vectors = lsa(files['text'])
     elif args.type == 'lda':
         vectors = lda(files['text'])
+    elif args.type == 'test':
+        vectors = test(files['text'])
+    elif args.type == 'rdf':
+        vectors = rdf(files['text'])
     else:
         assert False, '{} is not implemented'.format(args.type)
 
     if args.labels == 'db':
         labels = [list(map(int, ids.split(','))) for ids in files['label_ids']]
     elif args.labels == 'cluster':
-        labels = cluster(vectors, n_clusters=9)
+        labels = cluster(vectors, n_clusters=20)
     else:
         assert False, '{} is not implemented'.format(args.labels)
 
@@ -131,41 +188,112 @@ if __name__ == '__main__':
                 out.write('{}\t{}\t{}\n'.format(text_ids[i], file_path[i], labels[i]))
 
     #vectors = PCA(n_components=30).fit_transform(vectors)
-
+    print(vectors[0])
     emb = TSNE(random_state=42).fit_transform(vectors)
     print(emb.shape)
 
-    for i in range(len(emb)):
-        plt.plot(emb[i][0], emb[i][1], marker='')
-        if args.labels == 'db':
-            for lbl in labels[i]:
-                plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
-        elif args.labels == 'cluster':
-            plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
-
-    plt.axis('off')
-    plt.show()
-
+    # for i in range(len(emb)):
+    #     plt.plot(emb[i][0], emb[i][1], marker='')
+    #     if args.labels == 'db':
+    #         for lbl in labels[i]:
+    #             plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
+    #     elif args.labels == 'cluster':
+    #         plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
+    #
+    # plt.axis('off')
+    # plt.show()
     if args.cmat:
-        db_labels = pd.read_sql("SELECT * FROM Labels", conn)
-        i2l = dict(zip(db_labels['label_id'], db_labels['label_desc']))
-        df = files
-        y = [int(x.split(',')[0]) for x in df['label_ids']]  # FIXME only first
-        y_pred = labels  # FIXME Only for --labels cluster
-        y_labels = [i2l[x] for x in y]  # None
-        df['labels'] = [','.join(i2l[int(l)] for l in x.split(','))
-                        for x in df['label_ids']]
-        del df['text']  # due to performance issues
-        cmat(X=emb,
+        width = 600
+        height = 600
+        cmap = 'tableau20'  # https://vega.github.io/vega/docs/schemes/
+        cm_sort = True
+        sort_type = 'rc'
+        inter_type = 'mat_leg'
+        if args.type2 is None:
+            db_labels = pd.read_sql("SELECT * FROM Labels", conn)
+            i2l = dict(zip(db_labels['label_id'], db_labels['label_desc']))
+            # expand files (one label per file)
+            y = [int(label_id) for i, ids in enumerate(files['label_ids'])
+                 for label_id in ids.split(',')]
+            y_labels = [i2l[x] for x in y]  # None
+            new_ids = [i for i, ids in enumerate(files['label_ids'])
+                       for label_id in ids.split(',')]
+            y_pred = [labels[i] for i in new_ids]
+            # y_pred = labels  # FIXME Only for --labels cluster
+            y_pred_labels = None
+            X = np.array([emb[i] for i in new_ids])
+            X_pred = None
+            print(X.shape)
+            new_file_id = [files['file_id'][i] for i in new_ids]
+            new_file_path = [files['file_path'][i] for i in new_ids]
+            new_label_ids = [files['label_ids'][i] for i in new_ids]
+            new_labels = [','.join(i2l[int(l)] for l in x.split(',')) for x in
+                          new_label_ids]
+            new_text = [files['text'][i] for i in new_ids]
+            df = pd.DataFrame({
+                'file_id': new_file_id,
+                'file_path': new_file_path,
+                'label_ids': new_label_ids,
+                'labels': new_labels,
+                'text': new_text})
+            df['labels'] = [','.join(i2l[int(l)] for l in x.split(','))
+                            for x in df['label_ids']]
+            df['file_name'] = [os.path.basename(x) for x in df['file_path']]
+            df['file_path'] = ['//' + x for x in df['file_path']]
+            del df['text']  # due to performance issues
+            tooltip_cols = ['file_id', 'file_name', 'file_path', 'label_ids',
+                            'labels']
+            table_cols = ['file_id', 'file_name', 'label', 'label_id',
+                          'label_id_pred']
+            href = 'file_path'
+            cm_filename = f'cm_{args.type}.html'
+        else:
+            if args.type2 == 'word2vec':
+                vectors2 = w2v(texts)
+            elif args.type2 == 'doc2vec':
+                vectors2 = d2v(texts, text_ids)
+            elif args.type2 == 'lsa':
+                vectors2 = lsa(files['text'])
+            elif args.type2 == 'lda':
+                vectors2 = lda(files['text'])
+            elif args.type2 == 'test':
+                vectors2 = test(files['text'])
+            elif args.type2 == 'rdf':
+                vectors2 = rdf(files['text'])
+            else:
+                assert False, '{} is not implemented'.format(args.type)
+            labels2 = cluster(vectors2, n_clusters=20)
+            print(vectors2[0])
+            emb2 = TSNE(random_state=42).fit_transform(vectors2)
+            print(emb2.shape)
+            y = labels
+            y_labels = None
+            y_pred = labels2
+            y_pred_labels = None
+            X = emb
+            X_pred = emb2
+            df = files
+            df['file_name'] = [os.path.basename(x) for x in df['file_path']]
+            df['file_path'] = ['//' + x for x in df['file_path']]
+            del df['text']  # due to performance issues
+            tooltip_cols = ['file_id', 'file_name', 'file_path']
+            table_cols = ['file_id', 'file_name', 'label_id', 'label_id_pred']
+            href = 'file_path'
+            cm_filename = f'cm_{args.type}_{args.type2}.html'
+        cmat(X=X,
+             X_pred=X_pred,
              y=y,
              y_pred=y_pred,
              df=df,
-             tooltip_cols=['file_id',
-                           'file_path',
-                           'label_ids',
-                           'labels'],
+             tooltip_cols=tooltip_cols,
+             table_cols=table_cols,
+             href=href,
+             width=width,
+             height=height,
              y_labels=y_labels,
-             y_pred_labels=None,
-             cmap='tableau20',  # https://vega.github.io/vega/docs/schemes/
-             filename='cm.html',
-             sort=True)
+             y_pred_labels=y_pred_labels,
+             cmap=cmap,
+             filename=cm_filename,
+             sort=cm_sort,
+             sort_type=sort_type,
+             inter_type=inter_type)
