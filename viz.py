@@ -3,7 +3,7 @@ import altair as alt
 import pandas as pd
 
 
-def contingency_matrix(X, y, y_pred, df=pd.DataFrame(), X_pred=None,
+def contingency_matrix(y, y_pred, df=pd.DataFrame(), X=None, X_pred=None,
                        y_labels=None, y_pred_labels=None,
                        tooltip_cols=None,
                        table_cols=None, table_widths=None,
@@ -15,7 +15,7 @@ def contingency_matrix(X, y, y_pred, df=pd.DataFrame(), X_pred=None,
     table_cols = [] if table_cols is None else table_cols
     table_widths = [0 for _ in table_cols] if table_widths is None else table_widths
     tooltip_cols.extend(['label_id', 'label_id_pred'])
-    X_pred = X if X_pred is None else X_pred
+    X = X_pred if X is None else X
     df['x'], df['y'] = X[:, 0], X[:, 1]
     df['x2'], df['y2'] = X_pred[:, 0], X_pred[:, 1]
     df['label_id'], df['label_id_pred'] = y, y_pred
@@ -180,3 +180,70 @@ def contingency_matrix(X, y, y_pred, df=pd.DataFrame(), X_pred=None,
         color='independent')) & table)
     cmat.save(filename)
     return cmat
+
+
+def metrics(M, metrics_labels, types, filename='metrics.html'):
+    rows = [(metrics_labels[i], types[j], types[k], m)
+            for (i, j, k), m in np.ndenumerate(M)]
+    columns = ['m', 't1', 't2', 'v']
+    df = pd.DataFrame.from_records(rows, columns=columns)
+    rating_radio = alt.binding_radio(options=metrics_labels)
+    rating_select = alt.selection_single(fields=['m'],
+                                         bind=rating_radio,
+                                         name="Metric",
+                                         empty='none',
+                                         init={'m': metrics_labels[0]})
+    heatmap = alt.Chart(df).encode(
+        alt.X('t2:N'),
+        alt.Y('t1:N'),
+    ).mark_rect().encode(
+        color='v:Q'
+    )
+    text = alt.Chart(df).encode(
+        alt.X('t2:N'),
+        alt.Y('t1:N'),
+    ).mark_text(baseline='middle').encode(
+        text=alt.Text('v:Q', format='.3f'),
+        color=alt.value('black'),
+        # color=alt.condition(
+        #     alt.datum.v < 0.8,
+        #     alt.value('black'),
+        #     alt.value('white')
+        # )
+    )
+    p = (heatmap + text).add_selection(
+        rating_select
+    ).transform_filter(
+        rating_select
+    ).properties(width=400, height=400)
+    p.save(filename)
+    return p
+
+
+def unsupervised_metrics(M, metrics_labels, types,
+                         filename='metrics_unsuper.html'):
+    rows = [(metrics_labels[i], types[j], m)
+            for (i, j), m in np.ndenumerate(M)]
+    columns = ['m', 't', 'v']
+    df = pd.DataFrame.from_records(rows, columns=columns)
+    heatmap = alt.Chart(df).encode(
+        alt.X('m:N'),
+        alt.Y('t:N'),
+    ).mark_rect().encode(
+        color='v:Q'
+    )
+    text = alt.Chart(df).encode(
+        alt.X('m:N'),
+        alt.Y('t:N'),
+    ).mark_text(baseline='middle').encode(
+        text=alt.Text('v:Q', format='.3f'),
+        color=alt.value('black'),
+        # color=alt.condition(
+        #     alt.datum.v < 0.8,
+        #     alt.value('black'),
+        #     alt.value('white')
+        # )
+    )
+    p = (heatmap + text).properties(width=400, height=400)
+    p.save(filename)
+    return p
