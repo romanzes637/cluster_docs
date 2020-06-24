@@ -6,11 +6,17 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.cluster import KMeans
+from sklearn.metrics.cluster import adjusted_mutual_info_score, \
+    adjusted_rand_score, calinski_harabasz_score, davies_bouldin_score, \
+    completeness_score, fowlkes_mallows_score, \
+    homogeneity_completeness_v_measure, homogeneity_score, \
+    mutual_info_score, normalized_mutual_info_score, \
+    silhouette_score, silhouette_samples, v_measure_score
 
 from nltk.corpus import stopwords
 import pandas as pd
 from sklearn.manifold import TSNE
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
 import numpy as np
 import os
 import argparse
@@ -21,12 +27,6 @@ from pprint import pprint
 from viz import contingency_matrix as cmat
 from viz import metrics as metrics_viz
 from viz import unsupervised_metrics as unsupervised_metrics_viz
-from sklearn.metrics.cluster import adjusted_mutual_info_score, \
-    adjusted_rand_score, calinski_harabasz_score, davies_bouldin_score, \
-    completeness_score, fowlkes_mallows_score, \
-    homogeneity_completeness_v_measure, homogeneity_score, \
-    mutual_info_score, normalized_mutual_info_score, \
-    silhouette_score, silhouette_samples, v_measure_score
 
 
 def w2v(data, model_path='data/word2vec_sg0'):
@@ -89,10 +89,11 @@ def test(corpus):
     return np.random.rand(len(corpus), 2)
 
 
-def rdf(corpus):
-    with open('data/dict.jsonld', encoding="utf8") as f:
+def rdf(corpus, model_path='data/dict.jsonld', verbose=0):
+    with open(model_path, encoding="utf8") as f:
         data = json.load(f)
-    pprint(data)
+    if verbose:
+        pprint(data)
     w2i, i2w, ids = {}, {}, []
     for d in data['@graph']:
         if d['@type'] != 'skos:Concept':
@@ -125,7 +126,7 @@ def rdf(corpus):
     return vectors
 
 
-def topic_net(files, *args, **kwargs):
+def topic_net(files):
     data_path = 'data/topic_net.csv'
     df = pd.read_csv(data_path, usecols=['file_paths', 'vec'],
                      converters={'vec': lambda x: json.loads(x)})
@@ -221,20 +222,19 @@ if __name__ == '__main__':
                 out.write('{}\t{}\t{}\n'.format(text_ids[i], file_path[i], labels[i]))
 
     #vectors = PCA(n_components=30).fit_transform(vectors)
-    print(vectors[0])
     emb = TSNE(random_state=42).fit_transform(vectors)
     print(emb.shape)
 
-    for i in range(len(emb)):
-        plt.plot(emb[i][0], emb[i][1], marker='')
-        if args.labels == 'db':
-            for lbl in labels[i]:
-                plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
-        elif args.labels == 'cluster':
-            plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
-
-    plt.axis('off')
-    plt.show()
+    # for i in range(len(emb)):
+    #     plt.plot(emb[i][0], emb[i][1], marker='')
+    #     if args.labels == 'db':
+    #         for lbl in labels[i]:
+    #             plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
+    #     elif args.labels == 'cluster':
+    #         plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
+    #
+    # plt.axis('off')
+    # plt.show()
     if args.cmat:
         width = 600
         height = 600
@@ -307,7 +307,6 @@ if __name__ == '__main__':
                     print(f'saving vectors2 to {vectors2_path}')
                     np.save(vectors2_path, vectors2)
             labels2 = cluster(vectors2, n_clusters=20)
-            print(vectors2[0])
             emb2 = TSNE(random_state=42).fit_transform(vectors2)
             print(emb2.shape)
             y = labels
