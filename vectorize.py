@@ -16,7 +16,7 @@ from sklearn.metrics.cluster import adjusted_mutual_info_score, \
 from nltk.corpus import stopwords
 import pandas as pd
 from sklearn.manifold import TSNE
-# from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt
 import numpy as np
 import os
 import argparse
@@ -225,16 +225,16 @@ if __name__ == '__main__':
     emb = TSNE(random_state=42).fit_transform(vectors)
     print(emb.shape)
 
-    # for i in range(len(emb)):
-    #     plt.plot(emb[i][0], emb[i][1], marker='')
-    #     if args.labels == 'db':
-    #         for lbl in labels[i]:
-    #             plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
-    #     elif args.labels == 'cluster':
-    #         plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
-    #
-    # plt.axis('off')
-    # plt.show()
+    for i in range(len(emb)):
+        plt.plot(emb[i][0], emb[i][1], marker='')
+        if args.labels == 'db':
+            for lbl in labels[i]:
+                plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
+        elif args.labels == 'cluster':
+            plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
+
+    plt.axis('off')
+    plt.show()
     if args.cmat:
         width = 600
         height = 600
