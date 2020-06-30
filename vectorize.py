@@ -146,6 +146,19 @@ def topic_net(files):
     return vectors
 
 
+def bert(vecs_path='data/bert_vectors.json'):
+    with open(vecs_path) as f:
+        vecs = [json.loads(x) for x in f.readlines()]
+    return np.array(vecs)
+
+
+def scibert(vecs_path='data/scibert_vectors.json'):
+    with open(vecs_path) as f:
+        vecs = np.array([json.loads(x) for x in f.readlines()])
+    # vecs = TSNE(random_state=42).fit_transform(vecs)
+    return vecs
+
+
 def cluster(vec, n_clusters):
     return KMeans(n_clusters, random_state=42).fit(vec).labels_
 
@@ -160,12 +173,25 @@ def lbl2color(l):
     return colors[l % len(colors)]
 
 
+def mix():
+    vecs = []
+    for t in ['word2vec', 'scibert']:
+        print(t)
+        p = os.path.join('data', t + '_vectors.npy')
+        vecs.append(np.load(p))
+        print(vecs[-1].shape)
+    vecs = np.concatenate(vecs, axis=1)
+    return vecs
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--type', choices=['word2vec', 'doc2vec', 'lsa', 'lda',
-                                           'rdf', 'test', 'topic_net'])
+                                           'rdf', 'test', 'topic_net', 'bert',
+                                           'scibert', 'mix'])
     parser.add_argument('--type2', choices=['word2vec', 'doc2vec', 'lsa', 'lda',
-                                            'rdf', 'test', 'topic_net'],
+                                            'rdf', 'test', 'topic_net', 'bert',
+                                            'scibert', 'mix'],
                         default=None)
     parser.add_argument('--labels', choices=['db', 'cluster'])
     parser.add_argument('--save', type=str, default=None)
@@ -201,12 +227,18 @@ if __name__ == '__main__':
             vectors = rdf(files['text'])
         elif args.type == 'topic_net':
             vectors = topic_net(files)
+        elif args.type == 'bert':
+            vectors = bert()
+        elif args.type == 'scibert':
+            vectors = scibert()
+        elif args.type == 'mix':
+            vectors = mix()
         else:
             assert False, '{} is not implemented'.format(args.type)
         if args.from_file:
             print(f'saving vectors to {vectors_path}')
             np.save(vectors_path, vectors)
-
+    print(vectors.shape)
     if args.labels == 'db':
         labels = [list(map(int, ids.split(','))) for ids in files['label_ids']]
     elif args.labels == 'cluster':
@@ -301,6 +333,10 @@ if __name__ == '__main__':
                     vectors2 = rdf(files['text'])
                 elif args.type2 == 'topic_net':
                     vectors2 = topic_net(files)
+                elif args.type2 == 'bert':
+                    vectors2 = bert()
+                elif args.type2 == 'scibert':
+                    vectors2 = scibert()
                 else:
                     assert False, '{} is not implemented'.format(args.type2)
                 if args.from_file:
@@ -384,7 +420,8 @@ if __name__ == '__main__':
         print('silhouette_score')
         print(silhouette_score(X_pred, y_pred))
         # supervized
-        types = ['db', 'word2vec', 'doc2vec', 'lsa', 'lda', 'rdf', 'topic_net']
+        types = ['db', 'word2vec', 'doc2vec', 'lsa', 'lda', 'rdf', 'topic_net',
+                 'scibert', 'mix']
         paths = [os.path.join('data', x + '_vectors.npy') for x in types]
         metrics = [adjusted_mutual_info_score,
                    adjusted_rand_score, fowlkes_mallows_score,
@@ -433,7 +470,8 @@ if __name__ == '__main__':
                         M[k, i, j] = m(y, y_pred)
         metrics_viz(M, [m.__name__ for m in metrics], types)
         # unsupervized
-        types = ['word2vec', 'doc2vec', 'lsa', 'lda', 'rdf', 'topic_net']
+        types = ['word2vec', 'doc2vec', 'lsa', 'lda', 'rdf', 'topic_net',
+                 'scibert', 'mix']
         paths = [os.path.join('data', x + '_vectors.npy') for x in types]
         metrics = [calinski_harabasz_score, davies_bouldin_score,
                    silhouette_score]
