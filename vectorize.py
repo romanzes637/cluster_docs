@@ -11,7 +11,7 @@ import sklearn.metrics.cluster as cluster_metrics
 from nltk.corpus import stopwords
 import pandas as pd
 from sklearn.manifold import TSNE
-# from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt
 import numpy as np
 import os
 import argparse
@@ -242,16 +242,16 @@ if __name__ == '__main__':
         emb = TSNE(random_state=42).fit_transform(vectors)
         print(emb.shape)
 
-        # for i in range(len(emb)):
-        #     plt.plot(emb[i][0], emb[i][1], marker='')
-        #     if args.labels == 'db':
-        #         for lbl in labels[i]:
-        #             plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
-        #     elif args.labels == 'cluster':
-        #         plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
+        for i in range(len(emb)):
+            plt.plot(emb[i][0], emb[i][1], marker='')
+            if args.labels == 'db':
+                for lbl in labels[i]:
+                    plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
+            elif args.labels == 'cluster':
+                plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
 
-        # plt.axis('off')
-        # plt.show()
+        plt.axis('off')
+        plt.show()
         if args.cmat:
             width = 600
             height = 600
@@ -368,6 +368,7 @@ if __name__ == '__main__':
         types = metrics_conf['supervised']['types']
         paths = [os.path.join('data', x + '_vectors.npy') for x in types]
         for p, t in zip(paths, types):
+            print(f'{t} exists at {p}? {os.path.exists(p)}')
             if not os.path.exists(p):
                 if t == 'db':
                     continue
@@ -392,6 +393,7 @@ if __name__ == '__main__':
                 else:
                     assert False, '{} is not implemented'.format(t)
                 vectors_path = os.path.join('data', t + '_vectors.npy')
+                print(f'saving {t} vectors to {vectors_path}')
                 np.save(vectors_path, vec)
         metrics = [getattr(cluster_metrics, x)
                    for x in metrics_conf['supervised']['metrics']]
@@ -437,6 +439,7 @@ if __name__ == '__main__':
         types = metrics_conf['unsupervised']['types']
         paths = [os.path.join('data', x + '_vectors.npy') for x in types]
         for p, t in zip(paths, types):
+            print(f'{t} exists at {p}? {os.path.exists(p)}')
             if not os.path.exists(p):
                 if t == 'db':
                     continue
@@ -461,6 +464,7 @@ if __name__ == '__main__':
                 else:
                     assert False, '{} is not implemented'.format(t)
                 vectors_path = os.path.join('data', t + '_vectors.npy')
+                print(f'saving {t} vectors to {vectors_path}')
                 np.save(vectors_path, vec)
         metrics = [getattr(cluster_metrics, x)
                    for x in metrics_conf['unsupervised']['metrics']]
