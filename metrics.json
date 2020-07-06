@@ -1,0 +1,15 @@
+{
+  "supervised": {
+    "types": ["db", "word2vec", "doc2vec", "lsa", "lda", "rdf", "topic_net",
+      "scibert"],
+    "metrics": ["adjusted_mutual_info_score", "adjusted_rand_score",
+      "fowlkes_mallows_score", "completeness_score", "homogeneity_score",
+      "v_measure_score", "normalized_mutual_info_score", "mutual_info_score"]
+  },
+  "unsupervised": {
+    "types": ["word2vec", "doc2vec", "lsa", "lda", "rdf", "topic_net",
+      "scibert"],
+    "metrics": ["calinski_harabasz_score", "davies_bouldin_score",
+      "silhouette_score"]
+  }
+}

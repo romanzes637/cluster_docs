@@ -182,7 +182,7 @@ def contingency_matrix(y, y_pred, df=pd.DataFrame(), X=None, X_pred=None,
     return cmat
 
 
-def metrics(M, metrics_labels, types, filename='metrics.html'):
+def metrics(M, metrics_labels, types, filename='metrics_supervised.html'):
     rows = [(metrics_labels[i], types[j], types[k], m)
             for (i, j, k), m in np.ndenumerate(M)]
     columns = ['m', 't1', 't2', 'v']
@@ -221,7 +221,7 @@ def metrics(M, metrics_labels, types, filename='metrics.html'):
 
 
 def unsupervised_metrics(M, metrics_labels, types,
-                         filename='metrics_unsuper.html'):
+                         filename='metrics_unsupervised.html'):
     rows = [(metrics_labels[i], types[j], m)
             for (i, j), m in np.ndenumerate(M)]
     columns = ['m', 't', 'v']
