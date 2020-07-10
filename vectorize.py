@@ -2,6 +2,7 @@ import sqlite3
 
 from gensim.models.word2vec import Word2Vec
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+from gensim.summarization.bm25 import get_bm25_weights
 from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
@@ -11,7 +12,7 @@ import sklearn.metrics.cluster as cluster_metrics
 from nltk.corpus import stopwords
 import pandas as pd
 from sklearn.manifold import TSNE
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
 import numpy as np
 import os
 import argparse
@@ -28,7 +29,10 @@ def w2v(data, model_path='data/word2vec_sg0'):
     if os.path.isfile(model_path):
         model = Word2Vec.load(model_path)
     else:
-        model = Word2Vec(data, size=100, window=5, min_count=5, workers=4, iter=15, sg=0)
+        model = Word2Vec(data,
+                         # max_vocab_size=50000,
+                         size=100, window=5, min_count=5,
+                         workers=4, iter=15, sg=0)
         model.save(model_path)
         print('Model Saved:', model_path)
 
@@ -54,7 +58,10 @@ def d2v(data, ids, model_path='data/doc2vec_dm1'):
     if os.path.isfile(model_path):
         model = Doc2Vec.load(model_path)
     else:
-        model = Doc2Vec(tagged_data, vector_size=100, window=5, min_count=5, workers=4, epochs=15, dm=1)
+        model = Doc2Vec(tagged_data,
+                        # max_vocab_size=50000,
+                        vector_size=100, window=5, min_count=5,
+                        workers=4, epochs=15, dm=1)
         model.save(model_path)
         print("Model Saved:", model_path)
 
@@ -66,17 +73,45 @@ def d2v(data, ids, model_path='data/doc2vec_dm1'):
 
 
 def lsa(corpus):
-    tfidf = TfidfVectorizer().fit_transform(corpus).toarray()
+    tfidf = TfidfVectorizer(max_features=50000,
+                            norm='l2').fit_transform(corpus).toarray()
     return TruncatedSVD(n_components=100).fit_transform(tfidf)
 
 
+def tfidf(corpus):
+    return TfidfVectorizer(max_features=50000,
+                           norm='l2',
+                           ngram_range=(1, 1)).fit_transform(corpus).toarray()
+
+
+def bow(corpus):
+    bow = CountVectorizer(max_features=50000,
+                          ngram_range=(1, 1),
+                          dtype=np.float).fit_transform(corpus).toarray()
+    bow /= bow.sum(axis=1, keepdims=True)  # L1
+    # bow /= np.linalg.norm(bow, axis=1, keepdims=True)  # L2
+    bow[np.isnan(bow)] = 0
+    return bow
+
+
 def lda(corpus):
-    tf = CountVectorizer().fit_transform(corpus).toarray()
+    tf = CountVectorizer(max_features=50000,
+                         dtype=np.float).fit_transform(corpus).toarray()
+    # tf /= tf.sum(axis=1, keepdims=True)  # L1
+    # tf /= np.linalg.norm(tf, axis=1, keepdims=True)  # L2 BAD
     return LatentDirichletAllocation(
             n_components=100,
             random_state=42,
             n_jobs=-1,
             verbose=1).fit_transform(tf)
+
+
+def bm25(data):
+    vectors = np.array(get_bm25_weights(data, n_jobs=-1))
+    # vectors /= vectors.sum(axis=1, keepdims=True)  # L1
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)  # L2
+    vectors[np.isnan(vectors)] = 0
+    return vectors
 
 
 def test(corpus):
@@ -116,13 +151,13 @@ def rdf(corpus, model_path='data/dict.jsonld', verbose=0):
                 i = w2i.get(t, None)
                 if i is not None:
                     vectors[index, i] += 1
-    vectors /= vectors.sum(axis=1, keepdims=True)
-    vectors = np.nan_to_num(vectors, nan=0)
+    vectors /= vectors.sum(axis=1, keepdims=True)  # L1
+    # vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)  # L2
+    vectors[np.isnan(vectors)] = 0
     return vectors
 
 
-def topic_net(files):
-    data_path = 'data/topic_net.csv'
+def topic_net(files, data_path='data/topic_net.csv'):
     df = pd.read_csv(data_path, usecols=['file_paths', 'vec'],
                      converters={'vec': lambda x: json.loads(x)})
     dim = len(df['vec'][0])
@@ -168,14 +203,54 @@ def lbl2color(l):
     return colors[l % len(colors)]
 
 
+def vectors_factory(emb_type, dataset, files, indices=None):
+    stops = set(stopwords.words('english'))
+    texts = [list(filter(lambda w: w not in stops, text.split()))
+             for text in files['text']]
+    corpus = [' '.join(x) for x in texts]
+    text_ids = list(map(int, files['file_id']))
+    if emb_type == 'word2vec':
+        vectors = w2v(texts,
+                      model_path=f'data/word2vec_sg0_{dataset}')
+    elif emb_type == 'doc2vec':
+        vectors = d2v(texts, text_ids,
+                      model_path=f'data/doc2vec_dm1_{dataset}')
+    elif emb_type == 'lsa':
+        vectors = lsa(corpus)
+    elif emb_type == 'lda':
+        vectors = lda(corpus)
+    elif emb_type == 'test':
+        vectors = test(corpus)
+    elif emb_type == 'rdf':
+        vectors = rdf(files['text'], model_path=f'data/dict_{dataset}.jsonld')
+    elif emb_type == 'topic_net':
+        vectors = topic_net(files,
+                            data_path=f'data/topic_net_{dataset}.csv')
+    elif emb_type == 'bert':
+        vectors = bert()
+    elif emb_type == 'scibert':
+        vectors = scibert(vecs_path=f'data/scibert_{dataset}_vectors.json')
+        if indices is not None:
+            vectors = vectors[indices,:]
+    elif emb_type == 'tfidf':
+        vectors = tfidf(corpus)
+    elif emb_type == 'bow':
+        vectors = bow(corpus)
+    elif emb_type == 'bm25':
+        vectors = bm25(texts)
+    else:
+        assert False, '{} is not implemented'.format(emb_type)
+    return vectors
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--type', choices=['word2vec', 'doc2vec', 'lsa', 'lda',
                                            'rdf', 'test', 'topic_net', 'bert',
-                                           'scibert'], default=None)
+                                           'scibert', 'tfidf', 'bow', 'bm25'], default=None)
     parser.add_argument('--type2', choices=['word2vec', 'doc2vec', 'lsa', 'lda',
                                             'rdf', 'test', 'topic_net', 'bert',
-                                            'scibert'],
+                                            'scibert', 'tfidf', 'bow', 'bm25'],
                         default=None)
     parser.add_argument('--labels', choices=['db', 'cluster'], default=None)
     parser.add_argument('--save', type=str, default=None)
@@ -183,42 +258,31 @@ if __name__ == '__main__':
     parser.add_argument('--from_file', action='store_true')
     parser.add_argument('--metrics', nargs='?', default=None,
                         const='metrics.json')
+    parser.add_argument('--dataset', default='mouse')
+    parser.add_argument('--n_clusters', type=int, default=42)
     args = parser.parse_args()
 
-    conn = sqlite3.connect('data/mouse.sqlite')
-    stops = set(stopwords.words('english'))
+    conn = sqlite3.connect(f'data/{args.dataset}.sqlite')
 
     files = pd.read_sql('SELECT * FROM Files', conn)
 
-    texts = [list(filter(lambda w: w not in stops, text.split())) for text in files['text']]
-    text_ids = list(map(int, files['file_id']))
-
+    limit_files_ids=None
+    # min_len = 1
+    # max_len = 3000
+    # limit_files_ids = [i for i, t in enumerate(files['text'])
+    #                    if min_len <= len(t.split()) <= max_len]
+    # files = files.iloc[limit_files_ids]
+    # files.reset_index(drop=True, inplace=True)
+    # print(len(files))
     if args.type is not None and args.labels is not None:
-        vectors_path = os.path.join('data', args.type + '_vectors.npy')
+        vectors_path = os.path.join('data', '_'.join(
+            [args.type, args.dataset, 'vectors.npy']))
         if args.from_file and os.path.exists(vectors_path):
             print(f'loading vectors from {vectors_path}')
             vectors = np.load(vectors_path)
         else:
-            if args.type == 'word2vec':
-                vectors = w2v(texts)
-            elif args.type == 'doc2vec':
-                vectors = d2v(texts, text_ids)
-            elif args.type == 'lsa':
-                vectors = lsa(files['text'])
-            elif args.type == 'lda':
-                vectors = lda(files['text'])
-            elif args.type == 'test':
-                vectors = test(files['text'])
-            elif args.type == 'rdf':
-                vectors = rdf(files['text'])
-            elif args.type == 'topic_net':
-                vectors = topic_net(files)
-            elif args.type == 'bert':
-                vectors = bert()
-            elif args.type == 'scibert':
-                vectors = scibert()
-            else:
-                assert False, '{} is not implemented'.format(args.type)
+            vectors = vectors_factory(args.type, args.dataset, files,
+                                      limit_files_ids)
             if args.from_file:
                 print(f'saving vectors to {vectors_path}')
                 np.save(vectors_path, vectors)
@@ -227,7 +291,7 @@ if __name__ == '__main__':
         if args.labels == 'db':
             labels = [list(map(int, ids.split(','))) for ids in files['label_ids']]
         elif args.labels == 'cluster':
-            labels = cluster(vectors, n_clusters=27)
+            labels = cluster(vectors, n_clusters=args.n_clusters)
         else:
             assert False, '{} is not implemented'.format(args.labels)
 
@@ -242,16 +306,16 @@ if __name__ == '__main__':
         emb = TSNE(random_state=42).fit_transform(vectors)
         print(emb.shape)
 
-        for i in range(len(emb)):
-            plt.plot(emb[i][0], emb[i][1], marker='')
-            if args.labels == 'db':
-                for lbl in labels[i]:
-                    plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
-            elif args.labels == 'cluster':
-                plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
-
-        plt.axis('off')
-        plt.show()
+        # for i in range(len(emb)):
+        #     plt.plot(emb[i][0], emb[i][1], marker='')
+        #     if args.labels == 'db':
+        #         for lbl in labels[i]:
+        #             plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
+        #     elif args.labels == 'cluster':
+        #         plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
+        #
+        # plt.axis('off')
+        # plt.show()
         if args.cmat:
             width = 600
             height = 600
@@ -297,37 +361,20 @@ if __name__ == '__main__':
                 table_cols = ['file_id', 'file_name', 'label',
                               'label_id_pred', 'collection_id']
                 href = 'file_path'
-                cm_filename = f'cm_{args.type}.html'
+                cm_filename = f'cm_{args.type}_{args.dataset}.html'
             else:
-                vectors2_path = os.path.join('data', args.type + '_vectors2.npy')
+                vectors2_path = os.path.join('data', '_'.join(
+                    [args.type, args.dataset, 'vectors2.npy']))
                 if args.from_file and os.path.exists(vectors2_path):
                     print(f'loading vectors2 from {vectors2_path}')
                     vectors2 = np.load(vectors2_path)
                 else:
-                    if args.type2 == 'word2vec':
-                        vectors2 = w2v(texts)
-                    elif args.type2 == 'doc2vec':
-                        vectors2 = d2v(texts, text_ids)
-                    elif args.type2 == 'lsa':
-                        vectors2 = lsa(files['text'])
-                    elif args.type2 == 'lda':
-                        vectors2 = lda(files['text'])
-                    elif args.type2 == 'test':
-                        vectors2 = test(files['text'])
-                    elif args.type2 == 'rdf':
-                        vectors2 = rdf(files['text'])
-                    elif args.type2 == 'topic_net':
-                        vectors2 = topic_net(files)
-                    elif args.type2 == 'bert':
-                        vectors2 = bert()
-                    elif args.type2 == 'scibert':
-                        vectors2 = scibert()
-                    else:
-                        assert False, '{} is not implemented'.format(args.type2)
+                    vectors2 = vectors_factory(args.type2, args.dataset,
+                                               files, limit_files_ids)
                     if args.from_file:
                         print(f'saving vectors2 to {vectors2_path}')
                         np.save(vectors2_path, vectors2)
-                labels2 = cluster(vectors2, n_clusters=20)
+                labels2 = cluster(vectors2, n_clusters=args.n_clusters)
                 emb2 = TSNE(random_state=42).fit_transform(vectors2)
                 print(emb2.shape)
                 y = labels
@@ -343,7 +390,7 @@ if __name__ == '__main__':
                 tooltip_cols = ['file_id', 'file_name', 'file_path']
                 table_cols = ['file_id', 'file_name', 'label_id', 'label_id_pred']
                 href = 'file_path'
-                cm_filename = f'cm_{args.type}_{args.type2}.html'
+                cm_filename = f'cm_{args.type}_{args.type2}_{args.dataset}.html'
             cmat(y=y,
                  y_pred=y_pred,
                  df=df,
@@ -366,35 +413,16 @@ if __name__ == '__main__':
             metrics_conf = json.load(f)
         # supervised
         types = metrics_conf['supervised']['types']
-        paths = [os.path.join('data', x + '_vectors.npy') for x in types]
+        paths = [os.path.join('data', '_'.join([x, args.dataset, 'vectors.npy']))
+                 for x in types]
         for p, t in zip(paths, types):
             print(f'{t} exists at {p}? {os.path.exists(p)}')
             if not os.path.exists(p):
                 if t == 'db':
                     continue
-                if t == 'word2vec':
-                    vec = w2v(texts)
-                elif t == 'doc2vec':
-                    vec = d2v(texts, text_ids)
-                elif t == 'lsa':
-                    vec = lsa(files['text'])
-                elif t == 'lda':
-                    vec = lda(files['text'])
-                elif t == 'test':
-                    vec = test(files['text'])
-                elif t == 'rdf':
-                    vec = rdf(files['text'])
-                elif t == 'topic_net':
-                    vec = topic_net(files)
-                elif t == 'bert':
-                    vec = bert()
-                elif t == 'scibert':
-                    vec = scibert()
-                else:
-                    assert False, '{} is not implemented'.format(t)
-                vectors_path = os.path.join('data', t + '_vectors.npy')
-                print(f'saving {t} vectors to {vectors_path}')
-                np.save(vectors_path, vec)
+                vec = vectors_factory(t, args.dataset, files, limit_files_ids)
+                print(f'saving {t} vectors to {p}')
+                np.save(p, vec)
         metrics = [getattr(cluster_metrics, x)
                    for x in metrics_conf['supervised']['metrics']]
         M = np.zeros((len(metrics), len(types), len(types)))
@@ -409,7 +437,7 @@ if __name__ == '__main__':
                            for label_id in ids.split(',')]
             else:
                 vec = np.load(p)
-                y = cluster(vec, n_clusters=20)
+                y = cluster(vec, n_clusters=args.n_clusters)
             for j, (p2, t2) in enumerate(zip(paths, types)):
                 print(i, j, t, t2)
                 if t2 == 'db':
@@ -429,51 +457,44 @@ if __name__ == '__main__':
                             M[k, i, j] = m(y, y_pred)
                 else:
                     vec2 = np.load(p2)
-                    y_pred = cluster(vec2, n_clusters=20)
+                    y_pred = cluster(vec2, n_clusters=args.n_clusters)
                     if t == 'db':
                         y_pred = [y_pred[i] for i in new_ids]
                     for k, m in enumerate(metrics):
                         M[k, i, j] = m(y, y_pred)
-        metrics_viz(M, [m.__name__ for m in metrics], types)
+        metrics_viz(M, [m.__name__ for m in metrics], types,
+                    filename=f'metrics_supervised_{args.dataset}.html')
         # unsupervised
-        types = metrics_conf['unsupervised']['types']
-        paths = [os.path.join('data', x + '_vectors.npy') for x in types]
-        for p, t in zip(paths, types):
+        u_types = metrics_conf['unsupervised']['types']
+        u_paths = [os.path.join('data', '_'.join([x, args.dataset, 'vectors.npy']))
+                 for x in u_types]
+        for p, t in zip(u_paths, u_types):
             print(f'{t} exists at {p}? {os.path.exists(p)}')
             if not os.path.exists(p):
                 if t == 'db':
                     continue
-                if t == 'word2vec':
-                    vec = w2v(texts)
-                elif t == 'doc2vec':
-                    vec = d2v(texts, text_ids)
-                elif t == 'lsa':
-                    vec = lsa(files['text'])
-                elif t == 'lda':
-                    vec = lda(files['text'])
-                elif t == 'test':
-                    vec = test(files['text'])
-                elif t == 'rdf':
-                    vec = rdf(files['text'])
-                elif t == 'topic_net':
-                    vec = topic_net(files)
-                elif t == 'bert':
-                    vec = bert()
-                elif t == 'scibert':
-                    vec = scibert()
-                else:
-                    assert False, '{} is not implemented'.format(t)
-                vectors_path = os.path.join('data', t + '_vectors.npy')
-                print(f'saving {t} vectors to {vectors_path}')
-                np.save(vectors_path, vec)
+                vec = vectors_factory(t, args.dataset, files, limit_files_ids)
+                print(f'saving {t} vectors to {p}')
+                np.save(p, vec)
         metrics = [getattr(cluster_metrics, x)
                    for x in metrics_conf['unsupervised']['metrics']]
-        M = np.zeros((len(metrics), len(types)))
+        M = np.zeros((len(metrics), len(u_types)))
         for i, m in enumerate(metrics):
-            for j, (p, t) in enumerate(zip(paths, types)):
+            for j, (p, t) in enumerate(zip(u_paths, u_types)):
                 if not os.path.exists(p):
                     continue
                 vec = np.load(p)
-                y = cluster(vec, n_clusters=20)
+                y = cluster(vec, n_clusters=args.n_clusters)
                 M[i, j] = m(vec, y)
-        unsupervised_metrics_viz(M, [m.__name__ for m in metrics], types)
+        unsupervised_metrics_viz(M, [m.__name__ for m in metrics], u_types,
+                                 filename=f'metrics_unsupervised_{args.dataset}.html')
+        # clean
+        # for p, t in zip(paths, types):
+        #     if os.path.exists(p):
+        #         print(f'removing {t} vectors from {p}')
+        #         os.remove(p)
+        # clean
+        # for p, t in zip(u_paths, u_types):
+        #     if os.path.exists(p):
+        #         print(f'removing {t} vectors from {p}')
+        #         os.remove(p)
