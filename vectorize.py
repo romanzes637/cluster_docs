@@ -193,6 +193,36 @@ def cluster(vec, n_clusters):
     return KMeans(n_clusters, random_state=42).fit(vec).labels_
 
 
+def cluster_tokens(corpus, labels, vectorizer='tfidf'):
+    assert len(corpus) == len(labels)
+    unique_labels = list(set(labels))
+    # print(unique_labels)
+    labels_texts = {x: '' for x in unique_labels}
+    for text, label in zip(corpus, labels):
+        labels_texts[label] += text + ' '
+    # pprint(labels_texts)
+    if vectorizer == 'tfidf':
+        vectorizer = TfidfVectorizer(max_features=50000,
+                                     norm='l2',
+                                     ngram_range=(1, 1))
+        vecs = vectorizer.fit_transform(labels_texts.values()).toarray()
+        tokens = vectorizer.get_feature_names()
+    elif vectorizer == 'bow':
+        vectorizer = CountVectorizer(max_features=50000,
+                                     ngram_range=(1, 1),
+                                     dtype=np.float)
+        vecs = vectorizer.fit_transform(labels_texts.values()).toarray()
+        # vecs /= vecs.sum(axis=1, keepdims=True)  # L1
+        tokens = vectorizer.get_feature_names()
+    else:
+        raise ValueError(vectorizer)
+    sorted_ids = np.argsort(-vecs, axis=1)  # from max to min
+    # print(np.take_along_axis(vecs, sorted_ids, axis=1))
+    labels_tokens = {x: [tokens[j] for j in sorted_ids[i] if vecs[i][j] != 0]
+                     for i, x in enumerate(unique_labels)}
+    return labels_tokens
+
+
 def lbl2color(l):
     colors = [
         "#cc4767", "#6f312a", "#d59081", "#d14530", "#d27f35",
@@ -203,17 +233,23 @@ def lbl2color(l):
     return colors[l % len(colors)]
 
 
-def vectors_factory(emb_type, dataset, files, indices=None):
+def make_corpus(files):
     stops = set(stopwords.words('english'))
     texts = [list(filter(lambda w: w not in stops, text.split()))
              for text in files['text']]
     corpus = [' '.join(x) for x in texts]
+    return corpus
+
+
+def vectors_factory(emb_type, dataset, files, indices=None):
+    corpus = make_corpus(files)
+    data = [x.split() for x in corpus]
     text_ids = list(map(int, files['file_id']))
     if emb_type == 'word2vec':
-        vectors = w2v(texts,
+        vectors = w2v(data,
                       model_path=f'data/word2vec_sg0_{dataset}')
     elif emb_type == 'doc2vec':
-        vectors = d2v(texts, text_ids,
+        vectors = d2v(data, text_ids,
                       model_path=f'data/doc2vec_dm1_{dataset}')
     elif emb_type == 'lsa':
         vectors = lsa(corpus)
@@ -237,7 +273,7 @@ def vectors_factory(emb_type, dataset, files, indices=None):
     elif emb_type == 'bow':
         vectors = bow(corpus)
     elif emb_type == 'bm25':
-        vectors = bm25(texts)
+        vectors = bm25(data)
     else:
         assert False, '{} is not implemented'.format(emb_type)
     return vectors
@@ -253,6 +289,9 @@ if __name__ == '__main__':
                                             'scibert', 'tfidf', 'bow', 'bm25'],
                         default=None)
     parser.add_argument('--labels', choices=['db', 'cluster'], default=None)
+    parser.add_argument('--n_tokens', type=int, default=10)
+    parser.add_argument('--tokens_vectorizer',
+                        choices=['tfidf', 'bow'], default='tfidf')
     parser.add_argument('--save', type=str, default=None)
     parser.add_argument('--cmat', action='store_true')
     parser.add_argument('--from_file', action='store_true')
@@ -266,7 +305,7 @@ if __name__ == '__main__':
 
     files = pd.read_sql('SELECT * FROM Files', conn)
 
-    limit_files_ids=None
+    limit_files_ids = None
     # min_len = 1
     # max_len = 3000
     # limit_files_ids = [i for i, t in enumerate(files['text'])
@@ -294,6 +333,10 @@ if __name__ == '__main__':
             labels = cluster(vectors, n_clusters=args.n_clusters)
         else:
             assert False, '{} is not implemented'.format(args.labels)
+
+        # corpus = make_corpus(files)
+        # cts = cluster_tokens(corpus, labels, args.tokens_vectorizer)
+        # cts = {k: v[:args.n_tokens] for k, v in cts.items()}
 
         if args.save:
             with open('{}.csv'.format(args.save), 'w') as out:
@@ -355,11 +398,15 @@ if __name__ == '__main__':
                 df['file_name'] = [os.path.basename(x) for x in df['file_path']]
                 df['file_path'] = ['//' + x for x in df['file_path']]
                 df['collection_id'] = y
+                corpus = make_corpus(df)
+                cts = cluster_tokens(corpus, y_pred, args.tokens_vectorizer)
+                df['top_tokens'] = [' '.join(cts[i][:args.n_tokens])
+                                    for i in y_pred]
                 del df['text']  # due to performance issues
                 tooltip_cols = ['file_id', 'file_name', 'file_path', 'label_ids',
-                                'labels', 'collection_id']
+                                'labels', 'collection_id', 'top_tokens']
                 table_cols = ['file_id', 'file_name', 'label',
-                              'label_id_pred', 'collection_id']
+                              'label_id_pred', 'collection_id', 'top_tokens']
                 href = 'file_path'
                 cm_filename = f'cm_{args.type}_{args.dataset}.html'
             else:
