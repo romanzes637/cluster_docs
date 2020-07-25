@@ -11,6 +11,7 @@ def contingency_matrix(y, y_pred, df=pd.DataFrame(), X=None, X_pred=None,
                        cmap='tableau20', filename='cm.html',
                        sort=True, sort_type='rc',
                        inter_type='mat_leg'):
+    alt.data_transformers.disable_max_rows()
     tooltip_cols = [] if tooltip_cols is None else tooltip_cols
     table_cols = [] if table_cols is None else table_cols
     table_widths = [0 for _ in table_cols] if table_widths is None else table_widths
@@ -129,7 +130,11 @@ def contingency_matrix(y, y_pred, df=pd.DataFrame(), X=None, X_pred=None,
             alt.Y('y:Q', axis=None),
             color=alt.condition(selection | sel_y | sel_y_pred,
                                 alt.Color(label_col + ':N', sort=y_order,
-                                          scale=alt.Scale(scheme=cmap)),
+                                          scale=alt.Scale(scheme=cmap),
+                                          legend=alt.Legend(
+                                              columns=int(np.ceil(
+                                                  len(set(y))/20)),
+                                              symbolLimit=300)),
                                 alt.value('lightgray')),
             opacity=alt.condition(selection | sel_y | sel_y_pred,
                                   alt.value(1.0), alt.value(0.3)),
@@ -148,7 +153,11 @@ def contingency_matrix(y, y_pred, df=pd.DataFrame(), X=None, X_pred=None,
             color=alt.condition(selection | sel_y | sel_y_pred,
                                 alt.Color(label_pred_col + ':N',
                                           sort=y_pred_order,
-                                          scale=alt.Scale(scheme=cmap)),
+                                          scale=alt.Scale(scheme=cmap),
+                                          legend=alt.Legend(
+                                              columns=int(np.ceil(
+                                                  len(set(y_pred))/20)),
+                                              symbolLimit=300)),
                                 alt.value('lightgray')),
             opacity=alt.condition(selection | sel_y | sel_y_pred,
                                   alt.value(1.0), alt.value(0.3)),
@@ -428,3 +437,94 @@ def unsupervised_metrics(M, metrics_labels, types,
     p = (heatmap + text).properties(width=400, height=400)
     p.save(filename)
     return p
+
+
+def multi_line(source, id_vars='n_clusters',
+               title='multi_line',
+               filename='multi_line.html', cmap='tableau20',
+               width=1000, height=500):
+    # source = pd.DataFrame(np.cumsum(np.random.randn(100, 3), 0).round(2),
+    #                       columns=['A', 'B', 'C'],
+    #                       index=pd.RangeIndex(100, name='x'))
+    # print(source.columns)
+    # source = source.melt(id_vars=id_vars, var_name='category', value_name='y')
+    source = source.reset_index().melt(id_vars=id_vars,
+                                       var_name='score',
+                                       value_name='value')
+
+    # Create a selection that chooses the nearest point & selects based on x-value
+    nearest = alt.selection(type='single', nearest=True, on='mouseover',
+                            fields=[id_vars], empty='all', init={id_vars: []})
+
+    selection = alt.selection_multi(fields=['score'], bind='legend')
+    # brush = alt.selection(type='interval', encodings=['x'])
+
+    base = alt.Chart(source).encode(
+        x=f'{id_vars}:N',
+        y='value:Q',
+        color=alt.Color('score:N',
+                        scale=alt.Scale(scheme=cmap),
+                        legend=alt.Legend(
+                            # columns=int(np.ceil(len(set(df)) / 20)),
+                            symbolLimit=300))
+    )
+    line = base.mark_line().encode(
+        opacity=alt.condition(selection, alt.value(1), alt.value(0.05))
+    ).add_selection(
+       selection
+    ).interactive()
+    # upper = base.encode(
+    #     alt.X(f'{id_vars}:N', scale=alt.Scale(domain=brush))
+    # )
+    # lower = base.properties(
+    #     height=60
+    # ).add_selection(
+    #     brush
+    # )
+    # The basic line
+    # line = alt.Chart(source).mark_line(interpolate='basis').encode(
+    # line = alt.Chart(source).mark_line().encode(
+    #     x=f'{id_vars}:N',
+    #     y='y:Q',
+    #     color=alt.Color('category:N',
+    #                     # sort=y_pred_order,
+    #                     scale=alt.Scale(scheme=cmap)),
+    #     opacity=alt.condition(selection, alt.value(1), alt.value(0.2))
+    # ).add_selection(
+    #     selection
+    # )
+    # Transparent selectors across the chart. This is what tells us
+    # the x-value of the cursor
+    selectors = alt.Chart(source).mark_point().encode(
+        x=f'{id_vars}:N',
+        opacity=alt.value(0),
+    ).add_selection(
+        nearest
+    )
+    # Draw points on the line, and highlight based on selection
+    points = base.mark_point().encode(
+        opacity=alt.condition(nearest & selection, alt.value(1), alt.value(0))
+    )
+    #
+    # # Draw text labels near the points, and highlight based on selection
+    text = base.mark_text(align='left', dx=5, dy=-5).encode(
+        text=alt.condition(nearest & selection, 'value:Q', alt.value(' '),
+                           format='$.3f')
+    )
+    # Draw a rule at the location of the selection
+    rules = alt.Chart(source).mark_rule(color='gray').encode(
+        x=f'{id_vars}:N',
+    ).transform_filter(
+        nearest
+    )
+    #
+    # # Put the five layers into a chart and bind the data
+    plot = alt.layer(
+        line, selectors, points, rules, text
+    ).properties(
+        width=width, height=height, title=title
+    )
+    # plot = upper & lower
+    # plot = base.properties(title=title)
+    plot.save(filename)
+    return plot

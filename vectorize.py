@@ -6,12 +6,19 @@ from gensim.summarization.bm25 import get_bm25_weights
 from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN, AgglomerativeClustering, OPTICS
+from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import StandardScaler
 import sklearn.metrics.cluster as cluster_metrics
+from sklearn.metrics.pairwise import euclidean_distances
+# from hdbscan import HDBSCAN
 
 from nltk.corpus import stopwords
 import pandas as pd
 from sklearn.manifold import TSNE
+import matplotlib as mpl
+mpl.use('agg')
+import seaborn as sns
 from matplotlib import pyplot as plt
 import numpy as np
 import os
@@ -19,8 +26,9 @@ import argparse
 from sklearn.decomposition import PCA
 import json
 from pprint import pprint
+import pandas as pd
 
-from viz import contingency_matrix as cmat
+from viz import contingency_matrix as cmat, multi_line
 from viz import metrics as metrics_viz
 from viz import unsupervised_metrics as unsupervised_metrics_viz
 
@@ -189,8 +197,257 @@ def scibert(vecs_path='data/scibert_vectors.json'):
     return vecs
 
 
-def cluster(vec, n_clusters):
-    return KMeans(n_clusters, random_state=42).fit(vec).labels_
+def cluster(vec, n_clusters, true_labels=None):
+    if n_clusters > 0:
+        opt_func = 'silhouette_score'
+        if opt_func == 'silhouette_score':
+            opt_dir = 'max'
+        elif opt_func == 'davies_bouldin_score':
+            opt_dir = 'min'
+        elif opt_func == 'calinski_harabasz_score':
+            opt_dir = 'max'
+        else:
+            raise ValueError("opt_dir should be set to 'min' or 'max'")
+        dx = vec.max() - vec.min()
+        print(vec.min(), vec.max(), dx)
+        sup_func = getattr(cluster_metrics, 'adjusted_mutual_info_score')
+        epss = np.linspace(0.01*dx, dx, 1000)
+        opt_func = getattr(cluster_metrics, opt_func)
+        # sup_func = getattr(cluster_metrics, sup_func)
+        values = {}
+        # true_labels = np.array(true_labels)
+        for eps in epss:
+            clustering = DBSCAN(eps=eps, min_samples=2).fit(vec)
+            pred_labels = clustering.labels_
+            noise_mask = pred_labels != -1
+            # print(noise_mask)
+            n_clusters = len(set(pred_labels)) - 1
+            if n_clusters > 1:
+                # v = opt_func(vec[noise_mask], pred_labels[noise_mask])
+                v = opt_func(vec, pred_labels)
+            else:
+                v = -1
+            values[eps] = v
+            if true_labels is not None:
+                v2 = sup_func(true_labels, pred_labels)
+                print(f'eps: {eps}, n_clusters: {n_clusters}, unsup_score: {v}, sup_score: {v2}')
+            else:
+                print(f'eps: {eps}, n_clusters: {n_clusters}, unsup_score: {v}')
+        if opt_dir == 'min':
+            eps = min(values.keys(), key=lambda x: values[x])
+        elif opt_dir == 'max':
+            eps = max(values.keys(), key=lambda x: values[x])
+        else:
+            raise ValueError("opt_dir should be set to 'min' or 'max'")
+        print(f'eps: {eps}, unsup_score: {values[eps]}')
+        clustering = DBSCAN(eps=eps, min_samples=2).fit(vec)
+    # elif n_clusters == 0:
+        # clustering = HDBSCAN(algorithm='best',
+        #                      alpha=1.0,
+        #                      approx_min_span_tree=True,
+        #                      gen_min_span_tree=False,
+        #                      leaf_size=40,
+        #                      # memory=Memory(cachedir=None),
+        #                      metric='euclidean',
+        #                      min_cluster_size=5,
+        #                      min_samples=None,
+        #                      p=None).fit(vec)
+    else:
+        n_clusters, df = auto_cluster(vec, true_labels=true_labels)
+        clustering = KMeans(n_clusters, random_state=42).fit(vec)
+        # clustering = AgglomerativeClustering(distance_threshold=dt,
+        #                                      n_clusters=None,
+        #                                      # linkage='average',
+        #                                      compute_full_tree=True).fit(vec)
+
+        # clustering = KMeans(n_clusters, random_state=42).fit(vec)
+        # clustering = AgglomerativeClustering(n_clusters).fit(vec)
+        # clustering = GaussianMixture(n_components=n_clusters,
+        #                              covariance_type='full').fit(vec)
+    if hasattr(clustering, 'labels_'):
+        labels = clustering.labels_
+    else:
+        labels = clustering.predict(vec)
+    print(f'n_clusters: {len(set(labels))}')
+    return labels, df
+
+
+def auto_cluster(vec, opt_func='silhouette_score',
+                 opt_dir=None, start=2, end=100,
+                 sup_func='adjusted_mutual_info_score', true_labels=None):
+    start = start if start > 1 else 2
+    end = end if end > 1 else 2
+    unsup_names = ['silhouette_score',
+                   'davies_bouldin_score',
+                   'calinski_harabasz_score']
+    unsup_scores = {x: [] for x in unsup_names}
+    unsup_funcs = {x: getattr(cluster_metrics, x) for x in unsup_names}
+    unsup_dirs = dict(zip(unsup_names, ['max', 'min', 'max']))
+    sup_names = ["adjusted_mutual_info_score", "adjusted_rand_score",
+                 "fowlkes_mallows_score", "completeness_score",
+                 "homogeneity_score", "v_measure_score",
+                 "normalized_mutual_info_score",
+                 # "mutual_info_score"
+                 ]
+    sup_scores = {x: [] for x in sup_names}
+    sup_funcs = {x: getattr(cluster_metrics, x) for x in sup_names}
+    other_scores = {x: [] for x in ['inertias',
+                                    'mean_inter_distances',
+                                    'median_inter_distances',
+                                    'max_inter_distances',
+                                    'min_inter_distances',
+                                    'var_inter_distances',
+                                    'mean_intra_distances',
+                                    'median_intra_distances',
+                                    'max_intra_distances',
+                                    'min_intra_distances',
+                                    'var_intra_distances']}
+    size_scores = {x: [] for x in ['mean_size',
+                                   'median_size',
+                                   'max_size',
+                                   'min_size',
+                                   'var_size']}
+    n_clusters = list(range(start, end + 1))
+    for n in n_clusters:
+        clustering = KMeans(n, random_state=42).fit(vec)
+        pred_labels = clustering.labels_
+        centers = clustering.cluster_centers_
+        intra_distances = []
+        sizes = []
+        for i, center in enumerate(centers):
+            vecs = vec[pred_labels == i, :]
+            sizes.append(len(vecs)/len(vec))  # relative to total cluster size
+            dist_matrix = euclidean_distances(vecs, center[None, :])
+            intra_distances.extend(dist_matrix)
+        intra_distances = np.array(intra_distances)
+        other_scores['mean_intra_distances'].append(intra_distances.mean())
+        other_scores['median_intra_distances'].append(np.median(intra_distances))
+        other_scores['max_intra_distances'].append(intra_distances.max())
+        other_scores['min_intra_distances'].append(intra_distances.min())
+        other_scores['var_intra_distances'].append(intra_distances.var())
+        sizes = np.array(sizes)
+        size_scores['mean_size'].append(sizes.mean())
+        size_scores['median_size'].append(np.median(sizes))
+        size_scores['max_size'].append(sizes.max())
+        size_scores['min_size'].append(sizes.min())
+        size_scores['var_size'].append(sizes.var())
+        for x in unsup_names:
+            unsup_scores[x].append(unsup_funcs[x](vec, pred_labels))
+        other_scores['inertias'].append(clustering.inertia_)
+        dist_matrix = euclidean_distances(clustering.cluster_centers_)
+        f_dist_matrix = dist_matrix[dist_matrix != 0]
+        other_scores['mean_inter_distances'].append(f_dist_matrix.mean())
+        other_scores['median_inter_distances'].append(np.median(f_dist_matrix))
+        other_scores['max_inter_distances'].append(f_dist_matrix.max())
+        other_scores['min_inter_distances'].append(f_dist_matrix.min())
+        other_scores['var_inter_distances'].append(f_dist_matrix.var())
+        # print(other_scores['mean_inter_distances'][-1], other_scores['median_inter_distances'][-1],
+        #       other_scores['max_inter_distances'][-1], other_scores['min_inter_distances'][-1],
+        #       other_scores['var_inter_distances'][-1])
+        if true_labels is not None:
+            for x in sup_names:
+                sup_scores[x].append(sup_funcs[x](true_labels, pred_labels))
+        print(f'n_clusters: {n}, unsup_score: {unsup_scores[opt_func][-1]},'
+              f' sup_score: {sup_scores[sup_func][-1]}'
+              f' inertia: {clustering.inertia_}')
+    # Normalize
+    for name, scores in unsup_scores.items():
+        min_x, max_x = min(scores), max(scores)
+        unsup_scores[name] = [(x - min_x)/(max_x - min_x) for x in scores]
+    other_scores['max+min_inter_distances'] = [x + y for x, y in
+                                         zip(other_scores['max_inter_distances'],
+                                             other_scores['min_inter_distances'])]
+    other_scores['max+min_intra_distances'] = [x + y for x, y in
+                                               zip(other_scores[
+                                                       'max_intra_distances'],
+                                                   other_scores[
+                                                       'min_intra_distances'])]
+    other_scores['score'] = [x - y for x, y in zip(
+        other_scores['max+min_inter_distances'],
+        other_scores['max+min_intra_distances'])]
+    for name, scores in other_scores.items():
+        min_x, max_x = min(scores), max(scores)
+        other_scores[name] = [(x - min_x) / (max_x - min_x) for x in scores]
+    norm_size_scores = {f'norm_{k}': v for k, v in size_scores.items()}
+    for name, scores in norm_size_scores.items():
+        min_x, max_x = min(scores), max(scores)
+        norm_size_scores[name] = [(x - min_x) / (max_x - min_x) for x in scores]
+    norm_scores = {}
+    # 0 to 1
+    norm_scores['norm_max+min_inter_distances'] = [0.5*(x + y) for x, y in zip(
+        other_scores['max_inter_distances'],
+        other_scores['min_inter_distances'])]
+    # 0 to 1
+    norm_scores['norm_max+min_intra_distances'] = [0.5*(x + y) for x, y in zip(
+        other_scores['max_intra_distances'],
+        other_scores['min_intra_distances'])]
+    # 0 to 1
+    norm_scores['norm_max+min_norm_size'] = [0.5*(x + y) for x, y in zip(
+        norm_size_scores['norm_max_size'],
+        norm_size_scores['norm_min_size'])]
+    norm_scores['norm_min-max_norm_size'] = [0.5*(y - x) for x, y in zip(
+        norm_size_scores['norm_max_size'],
+        norm_size_scores['norm_min_size'])]
+    # -1 to 1
+    norm_scores['norm_score'] = [x - y for x, y in zip(
+        norm_scores['norm_max+min_inter_distances'],
+        norm_scores['norm_max+min_intra_distances'])]
+    norm_scores['norm_score_size'] = [x - y + z for x, y, z in zip(
+        norm_scores['norm_max+min_inter_distances'],
+        norm_scores['norm_max+min_intra_distances'],
+        norm_scores['norm_max+min_norm_size'])]
+    norm_scores['norm_score_min-max_size'] = [x - y + z for x, y, z in zip(
+        norm_scores['norm_max+min_inter_distances'],
+        norm_scores['norm_max+min_intra_distances'],
+        norm_scores['norm_min-max_norm_size'])]
+    # -1 to 2
+    norm_scores['norm_score_mean_size'] = [x - y + z for x, y, z in zip(
+        norm_scores['norm_max+min_inter_distances'],
+        norm_scores['norm_max+min_intra_distances'],
+        size_scores['mean_size'])]
+    norm_scores['norm_score_median_size'] = [x - y + z for x, y, z in zip(
+        norm_scores['norm_max+min_inter_distances'],
+        norm_scores['norm_max+min_intra_distances'],
+        size_scores['median_size'])]
+    norm_scores['norm_score_norm_mean_size'] = [x - y + z for x, y, z in zip(
+        norm_scores['norm_max+min_inter_distances'],
+        norm_scores['norm_max+min_intra_distances'],
+        norm_size_scores['norm_mean_size'])]
+    norm_scores['norm_score_norm_median_size'] = [x - y + z for x, y, z in zip(
+        norm_scores['norm_max+min_inter_distances'],
+        norm_scores['norm_max+min_intra_distances'],
+        norm_size_scores['norm_median_size'])]
+    norm_scores['mean_norm_score'] = [x - y + z for x, y, z in zip(
+        other_scores['mean_inter_distances'],
+        other_scores['mean_intra_distances'],
+        norm_size_scores['norm_mean_size'])]
+    norm_scores['median_norm_score'] = [x - y + z for x, y, z in zip(
+        other_scores['median_inter_distances'],
+        other_scores['median_intra_distances'],
+        norm_size_scores['norm_median_size'])]
+    for name, scores in norm_scores.items():
+        min_x, max_x = min(scores), max(scores)
+        norm_scores[name] = [(x - min_x) / (max_x - min_x) for x in scores]
+    data = {'n_clusters': n_clusters}
+    data.update(other_scores)
+    data.update(unsup_scores)
+    data.update(norm_scores)
+    data.update(size_scores)
+    data.update(norm_size_scores)
+    if true_labels is not None:
+        data.update(sup_scores)
+    df = pd.DataFrame.from_dict(data)
+    df = df.set_index('n_clusters')
+    # Find optimal number of clusters
+    opt_values = unsup_scores[opt_func]
+    if unsup_dirs[opt_func] == 'min':
+        n = n_clusters[opt_values.index(min(opt_values))]
+    elif unsup_dirs[opt_func] == 'max':
+        n = n_clusters[opt_values.index(max(opt_values))]
+    else:
+        raise ValueError("opt_dir should be set to 'min' or 'max'")
+    print(f'n_clusters: {n}')
+    return n, df
 
 
 def cluster_tokens(corpus, labels, vectorizer='tfidf'):
@@ -330,9 +587,29 @@ if __name__ == '__main__':
         if args.labels == 'db':
             labels = [list(map(int, ids.split(','))) for ids in files['label_ids']]
         elif args.labels == 'cluster':
-            labels = cluster(vectors, n_clusters=args.n_clusters)
+            emb = TSNE(random_state=42).fit_transform(vectors)
+            db_labels = pd.read_sql("SELECT * FROM Labels", conn)
+            i2l = dict(zip(db_labels['label_id'], db_labels['label_desc']))
+            # expand files (one label per file)
+            y = [int(label_id) for i, ids in enumerate(files['label_ids'])
+                 for label_id in ids.split(',')]
+            # y_labels = [i2l[x] for x in y]  # None
+            new_ids = [i for i, ids in enumerate(files['label_ids'])
+                       for label_id in ids.split(',')]
+            emb = np.array([emb[i] for i in new_ids])
+            print(emb.shape)
+            labels, df = cluster(emb, args.n_clusters, true_labels=y)
+            plt.figure()
+            ax = sns.lineplot(data=df, dashes=False).set_title(f'{args.type} {args.dataset}')
+            fig = ax.get_figure()
+            fig.set_size_inches(15, 15)
+            fig.savefig(f'clustering_{args.type}_{args.dataset}.png')
         else:
             assert False, '{} is not implemented'.format(args.labels)
+
+        # #vectors = PCA(n_components=30).fit_transform(vectors)
+        emb = TSNE(random_state=42).fit_transform(vectors)
+        # print(emb.shape)
 
         # corpus = make_corpus(files)
         # cts = cluster_tokens(corpus, labels, args.tokens_vectorizer)
@@ -345,23 +622,20 @@ if __name__ == '__main__':
                 for i in np.argsort(labels):
                     out.write('{}\t{}\t{}\n'.format(text_ids[i], file_path[i], labels[i]))
 
-        #vectors = PCA(n_components=30).fit_transform(vectors)
-        emb = TSNE(random_state=42).fit_transform(vectors)
-        print(emb.shape)
 
-        for i in range(len(emb)):
-            plt.plot(emb[i][0], emb[i][1], marker='')
-            if args.labels == 'db':
-                for lbl in labels[i]:
-                    plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
-            elif args.labels == 'cluster':
-                plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
-
-        plt.axis('off')
-        plt.show()
+        # for i in range(len(emb)):
+        #     plt.plot(emb[i][0], emb[i][1], marker='')
+        #     if args.labels == 'db':
+        #         for lbl in labels[i]:
+        #             plt.text(emb[i][0], emb[i][1], str(lbl), color=lbl2color(lbl), fontsize=12)
+        #     elif args.labels == 'cluster':
+        #         plt.text(emb[i][0], emb[i][1], str(labels[i]), color=lbl2color(labels[i]), fontsize=12)
+        #
+        # plt.axis('off')
+        # plt.show()
         if args.cmat:
-            width = 600
-            height = 600
+            width = 700
+            height = 700
             cmap = 'tableau20'  # https://vega.github.io/vega/docs/schemes/
             cm_sort = True
             sort_type = 'rc'
@@ -396,17 +670,18 @@ if __name__ == '__main__':
                 df['labels'] = [','.join(i2l[int(l)] for l in x.split(','))
                                 for x in df['label_ids']]
                 df['file_name'] = [os.path.basename(x) for x in df['file_path']]
-                df['file_path'] = ['//' + x for x in df['file_path']]
-                df['collection_id'] = y
+                df['file_path'] = ['//' + x if not x.startswith('http') else x
+                                   for x in df['file_path']]
+                # df['collection_id'] = y
                 corpus = make_corpus(df)
                 cts = cluster_tokens(corpus, y_pred, args.tokens_vectorizer)
                 df['top_tokens'] = [' '.join(cts[i][:args.n_tokens])
                                     for i in y_pred]
                 del df['text']  # due to performance issues
-                tooltip_cols = ['file_id', 'file_name', 'file_path', 'label_ids',
-                                'labels', 'collection_id', 'top_tokens']
+                tooltip_cols = ['file_id', 'file_name', 'file_path',
+                                'label_ids', 'labels', 'top_tokens', 'label_id']
                 table_cols = ['file_id', 'file_name', 'label',
-                              'label_id_pred', 'collection_id', 'top_tokens']
+                              'label_id_pred', 'top_tokens', 'label_id']
                 href = 'file_path'
                 cm_filename = f'cm_{args.type}_{args.dataset}.html'
             else:
@@ -421,7 +696,11 @@ if __name__ == '__main__':
                     if args.from_file:
                         print(f'saving vectors2 to {vectors2_path}')
                         np.save(vectors2_path, vectors2)
-                labels2 = cluster(vectors2, n_clusters=args.n_clusters)
+                if args.n_clusters == -1:
+                    n_clusters = auto_cluster(vectors2)
+                else:
+                    n_clusters = args.n_clusters
+                labels2 = cluster(vectors2, n_clusters=n_clusters)
                 emb2 = TSNE(random_state=42).fit_transform(vectors2)
                 print(emb2.shape)
                 y = labels
@@ -432,7 +711,8 @@ if __name__ == '__main__':
                 X_pred = emb2
                 df = files
                 df['file_name'] = [os.path.basename(x) for x in df['file_path']]
-                df['file_path'] = ['//' + x for x in df['file_path']]
+                df['file_path'] = ['//' + x if not x.startswith('http') else x
+                                   for x in df['file_path']]
                 del df['text']  # due to performance issues
                 tooltip_cols = ['file_id', 'file_name', 'file_path']
                 table_cols = ['file_id', 'file_name', 'label_id', 'label_id_pred']
@@ -472,43 +752,54 @@ if __name__ == '__main__':
                 np.save(p, vec)
         metrics = [getattr(cluster_metrics, x)
                    for x in metrics_conf['supervised']['metrics']]
-        M = np.zeros((len(metrics), len(types), len(types)))
+        methods_labels = {}
+        db_labels = pd.read_sql("SELECT * FROM Labels", conn)
+        i2l = dict(zip(db_labels['label_id'], db_labels['label_desc']))
+        # expand files (one label per file)
+        true_labels = [int(label_id) for i, ids in enumerate(files['label_ids'])
+                        for label_id in ids.split(',')]
+        new_ids = [i for i, ids in enumerate(files['label_ids'])
+                   for label_id in ids.split(',')]
         for i, (p, t) in enumerate(zip(paths, types)):
+            print(f'{i} clustering {p} {t}')
             if t == 'db':
-                db_labels = pd.read_sql("SELECT * FROM Labels", conn)
-                i2l = dict(zip(db_labels['label_id'], db_labels['label_desc']))
-                # expand files (one label per file)
-                y = [int(label_id) for i, ids in enumerate(files['label_ids'])
-                     for label_id in ids.split(',')]
-                new_ids = [i for i, ids in enumerate(files['label_ids'])
-                           for label_id in ids.split(',')]
+                labels = true_labels
             else:
                 vec = np.load(p)
-                y = cluster(vec, n_clusters=args.n_clusters)
+                # emb = TSNE(random_state=42).fit_transform(vec)
+                emb = vec
+                emb = np.array([emb[i] for i in new_ids])
+                labels, df = cluster(emb, args.n_clusters,
+                                     true_labels=true_labels)
+                # plt.figure()
+                # ax = sns.lineplot(data=df,
+                #                   dashes=False,
+                #                   palette=sns.color_palette('tab20',
+                #                                             len(df.columns))).set_title(
+                #     f'{t} {args.dataset} no tsne')
+                # plt.legend(
+                #     # bbox_to_anchor=(0.95, 1),
+                #            loc='upper right',
+                #            borderaxespad=0)
+                # fig = ax.get_figure()
+                # fig.set_size_inches(20, 10)
+                # fig.savefig(f'clustering_{t}_{args.dataset}_no_tsne.png')
+                multi_line(df,
+                           title=f'{t} {args.dataset} no tsne',
+                           filename=f'clustering_{t}_{args.dataset}_no_tsne.html')
+                # labels = cluster(vec, args.n_clusters)
+            methods_labels[t] = labels
+        pprint({k: len(set(v)) for k, v in methods_labels.items()})
+        M = np.zeros((len(metrics), len(types), len(types)))
+        for i, (p, t) in enumerate(zip(paths, types)):
+            y = methods_labels[t]
             for j, (p2, t2) in enumerate(zip(paths, types)):
                 print(i, j, t, t2)
-                if t2 == 'db':
-                    db_labels = pd.read_sql("SELECT * FROM Labels", conn)
-                    i2l = dict(
-                        zip(db_labels['label_id'], db_labels['label_desc']))
-                    # expand files (one label per file)
-                    y_pred = [int(label_id) for i, ids in
-                              enumerate(files['label_ids'])
-                              for label_id in ids.split(',')]
-                    new_ids = [i for i, ids in enumerate(files['label_ids'])
-                               for label_id in ids.split(',')]
-                    for k, m in enumerate(metrics):
-                        if t != 'db':
-                            M[k, i, j] = m([y[i] for i in new_ids], y_pred)
-                        else:
-                            M[k, i, j] = m(y, y_pred)
-                else:
-                    vec2 = np.load(p2)
-                    y_pred = cluster(vec2, n_clusters=args.n_clusters)
-                    if t == 'db':
-                        y_pred = [y_pred[i] for i in new_ids]
-                    for k, m in enumerate(metrics):
-                        M[k, i, j] = m(y, y_pred)
+                y_pred = methods_labels[t2]
+                if t == 'db' and t2 != 'db':
+                    y_pred = [y[i] for i in new_ids]
+                for k, m in enumerate(metrics):
+                    M[k, i, j] = m(y, y_pred)
         metrics_viz(M, [m.__name__ for m in metrics], types,
                     filename=f'metrics_supervised_{args.dataset}.html')
         # unsupervised
@@ -531,8 +822,9 @@ if __name__ == '__main__':
                 if not os.path.exists(p):
                     continue
                 vec = np.load(p)
-                y = cluster(vec, n_clusters=args.n_clusters)
-                M[i, j] = m(vec, y)
+                emb = TSNE(random_state=42).fit_transform(vec)
+                y = methods_labels[t]
+                M[i, j] = m(emb, y)
         unsupervised_metrics_viz(M, [m.__name__ for m in metrics], u_types,
                                  filename=f'metrics_unsupervised_{args.dataset}.html')
         # clean
